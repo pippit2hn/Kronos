@@ -481,6 +481,21 @@
 
                 <hr style="margin: 20px 0; border: 1px solid #e2e8f0;">
 
+                <!-- TradingView download -->
+                <div class="form-group">
+                    <label for="tv-symbol">Download from TradingView:</label>
+                    <input type="text" id="tv-symbol" value="BINANCE:BTCUSDT.P" placeholder="BINANCE:BTCUSDT.P">
+                    <select id="tv-interval">
+                        <option>5m</option><option>15m</option><option>30m</option>
+                        <option selected>1h</option><option>4h</option><option>1d</option>
+                    </select>
+                    <input type="number" id="tv-bars" value="5000" min="520" max="20000">
+                    <small class="form-text">Symbol, timeframe, number of candles (min 520). Saved to the data folder.</small>
+                </div>
+                <button id="fetch-tv-btn" class="btn btn-secondary">
+                    ⬇️ Download from TradingView
+                </button>
+
                 <!-- Data File Selection -->
                 <div class="form-group">
                     <label for="data-file-select">Select Data File:</label>
@@ -751,6 +766,26 @@
         }
 
         // Load data file list
+        async function fetchTradingView() {
+            const btn = document.getElementById('fetch-tv-btn');
+            btn.disabled = true;
+            try {
+                showStatus('info', 'Downloading from TradingView...');
+                const response = await axios.post('/api/fetch-tradingview', {
+                    symbol: document.getElementById('tv-symbol').value,
+                    interval: document.getElementById('tv-interval').value,
+                    bars: parseInt(document.getElementById('tv-bars').value)
+                });
+                await loadDataFiles();
+                document.getElementById('data-file-select').value = response.data.path;
+                showStatus('success', response.data.message);
+            } catch (error) {
+                showStatus('error', error.response?.data?.error || 'TradingView download failed');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
         async function loadDataFiles() {
             try {
                 const response = await axios.get('/api/data-files');
@@ -1191,6 +1226,8 @@
             // Load model button
             document.getElementById('load-model-btn').addEventListener('click', loadModel);
             
+            document.getElementById('fetch-tv-btn').addEventListener('click', fetchTradingView);
+
             // Load data button
             document.getElementById('load-data-btn').addEventListener('click', loadData);
             

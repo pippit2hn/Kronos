@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import json
+import re
 import plotly.graph_objects as go
 import plotly.utils
 from flask import Flask, render_template, request, jsonify
@@ -337,6 +338,31 @@ def get_data_files():
     """Get available data file list"""
     data_files = load_data_files()
     return jsonify(data_files)
+
+@app.route('/api/fetch-tradingview', methods=['POST'])
+def fetch_tradingview():
+    """Download OHLCV from TradingView and save it into the data directory"""
+    try:
+        from tradingview_client import fetch_ohlcv
+        body = request.get_json() or {}
+        symbol = (body.get('symbol') or '').strip()
+        interval = body.get('interval', '1h')
+        bars = int(body.get('bars', 5000))
+        if not re.fullmatch(r'[A-Za-z0-9_.!:\-]+', symbol):
+            return jsonify({'error': 'Invalid symbol, e.g. BINANCE:BTCUSDT.P'}), 400
+
+        df = fetch_ohlcv(symbol, interval, bars)
+        data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+        os.makedirs(data_dir, exist_ok=True)
+        filename = f"TV_{re.sub(r'[^A-Za-z0-9]+', '_', symbol)}_{interval}.csv"
+        path = os.path.join(data_dir, filename)
+        df.to_csv(path, index=False)
+        return jsonify({'success': True, 'path': path, 'name': filename, 'rows': len(df),
+                        'message': f'Saved {len(df)} rows to data/{filename}'})
+    except ImportError:
+        return jsonify({'error': 'Missing dependency: pip install websocket-client'}), 500
+    except Exception as e:
+        return jsonify({'error': f'TradingView fetch failed: {e}'}), 500
 
 @app.route('/api/load-data', methods=['POST'])
 def load_data():
