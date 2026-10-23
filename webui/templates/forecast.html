@@ -47,6 +47,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <h1 class="mono" id="h-sym">Kronos Live Forecast</h1>
     <span class="sub" id="h-sub">Probabilistic price forecast from sampled Kronos paths</span>
     <span class="badge" id="h-badge" style="display:none"></span>
+    <span id="live-dot" title="live" style="display:none;color:var(--up);font-size:12px;font-weight:600">● LIVE</span>
     <a class="sub" href="/" style="margin-left:auto">← Backtest UI</a>
   </header>
 
@@ -93,7 +94,7 @@ const $ = id => document.getElementById(id);
 const PRESETS = ["BINANCE:BTCUSDT.P","BINANCE:ETHUSDT.P","BINANCE:ZECUSDT.P","BYBIT:SOLUSDT.P","COINBASE:BTCUSD"];
 const MIN = {"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440};
 const HORIZONS = [["1h",60],["4h",240],["12h",720],["1D",1440],["3D",4320]];
-let modelReady = false, busy = false;
+let modelReady = false, busy = false, live = null, liveSrc = null, liveTimer = null;
 
 try { const s = localStorage.getItem('kf_symbol'); if (s) $('symbol').value = s; } catch(e){}
 
@@ -204,6 +205,42 @@ function render(r, horizonLabel){
     shapes:[{type:'line', xref:'paper', x0:0, x1:1, y0:r.now.price, y1:r.now.price, line:{color:mute, width:1, dash:'dot'}}],
   };
   Plotly.newPlot('chart', traces, layout, {responsive:true, displaylogo:false});
+  startLive(r, i0);
+}
+
+// ---- live price: server streams the newest candle over SSE ----
+function startLive(r, i0){
+  if (liveSrc) liveSrc.close();
+  live = {c: JSON.parse(JSON.stringify(r.candles)), i0: i0, price: r.now.price};
+  $('live-dot').style.display = '';
+  liveSrc = new EventSource(`/api/live/stream?symbol=${encodeURIComponent(r.symbol)}&interval=${r.interval}`);
+  liveSrc.onmessage = ev => {
+    const k = JSON.parse(ev.data), c = live.c;
+    const t = new Date(k.t * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    const n = c.t.length - 1;
+    if (t === c.t[n]) { c.open[n]=k.o; c.high[n]=k.h; c.low[n]=k.l; c.close[n]=k.c; c.volume[n]=k.v; }
+    else if (t > c.t[n]) { c.t.push(t); c.open.push(k.o); c.high.push(k.h); c.low.push(k.l); c.close.push(k.c); c.volume.push(k.v); }
+    else return;
+    live.price = k.c; live.time = t;
+    if (!liveTimer) liveTimer = setTimeout(paintLive, 400);   // throttle redraws
+  };
+  liveSrc.addEventListener('feed_error', ev => { $('live-dot').title = JSON.parse(ev.data).error; $('live-dot').style.opacity = .4; });
+  liveSrc.onopen = () => { $('live-dot').style.opacity = 1; $('live-dot').title = 'live'; };
+}
+
+function paintLive(){
+  liveTimer = null;
+  if (!live) return;
+  const c = live.c, i0 = Math.max(0, c.t.length - 200), sl = a => a.slice(i0);
+  const up = getComputedStyle(document.documentElement).getPropertyValue('--up').trim();
+  const dn = getComputedStyle(document.documentElement).getPropertyValue('--down').trim();
+  Plotly.restyle('chart', {x:[sl(c.t)], y:[sl(c.volume)], 'marker.color':[sl(c.close).map((cl,i)=>cl>=sl(c.open)[i]?up:dn)]}, [0]);
+  Plotly.restyle('chart', {x:[sl(c.t)], open:[sl(c.open)], high:[sl(c.high)], low:[sl(c.low)], close:[sl(c.close)]}, [1]);
+  Plotly.relayout('chart', {'shapes[0].y0': live.price, 'shapes[0].y1': live.price});
+  const v = document.querySelector('#stats .stat .v');
+  if (v) v.textContent = fmt(live.price);
+  const k = document.querySelector('#stats .stat .k');
+  if (k && live.time) k.textContent = 'LIVE · ' + live.time.slice(5, 16) + ' UTC';
 }
 </script>
 </body>

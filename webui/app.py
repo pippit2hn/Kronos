@@ -5,7 +5,7 @@ import json
 import re
 import plotly.graph_objects as go
 import plotly.utils
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response
 from flask_cors import CORS
 import sys
 import warnings
@@ -409,6 +409,18 @@ def forecast_start():
         forecast_jobs.pop(next(iter(forecast_jobs)))
     return jsonify({'job_id': job_id})
 
+@app.route('/api/live/stream')
+def live_stream():
+    """Server-sent events with the newest candle of a symbol"""
+    from live_feed import stream
+    from tradingview_client import INTERVALS
+    symbol = (request.args.get('symbol') or '').strip()
+    interval = request.args.get('interval', '1h')
+    if not re.fullmatch(r'[A-Za-z0-9_.!:\-]+', symbol) or interval not in INTERVALS:
+        return jsonify({'error': 'Invalid symbol or interval'}), 400
+    return Response(stream(symbol, interval), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
 @app.route('/api/forecast/status/<job_id>')
 def forecast_status(job_id):
     job = forecast_jobs.get(job_id)
@@ -786,5 +798,6 @@ if __name__ == '__main__':
     app.run(
         debug=os.environ.get('FLASK_DEBUG', '1') == '1',
         host=os.environ.get('HOST', '0.0.0.0'),
+        threaded=True,
         port=int(os.environ.get('PORT', '7070')),
     )
