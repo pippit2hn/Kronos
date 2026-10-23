@@ -10,6 +10,8 @@ from flask_cors import CORS
 import sys
 import warnings
 import datetime
+import threading
+import uuid
 warnings.filterwarnings('ignore')
 
 # Add project root directory to path
@@ -363,6 +365,56 @@ def fetch_tradingview():
         return jsonify({'error': 'Missing dependency: pip install websocket-client'}), 500
     except Exception as e:
         return jsonify({'error': f'TradingView fetch failed: {e}'}), 500
+
+# ---- Live forecast ----
+forecast_jobs = {}
+forecast_lock = threading.Lock()  # one forecast at a time (model is shared and heavy)
+
+@app.route('/forecast')
+def forecast_page():
+    return render_template('forecast.html')
+
+@app.route('/api/forecast/start', methods=['POST'])
+def forecast_start():
+    if predictor is None:
+        return jsonify({'error': 'Load a model first'}), 400
+    body = request.get_json() or {}
+    symbol = (body.get('symbol') or '').strip()
+    if not re.fullmatch(r'[A-Za-z0-9_.!:\-]+', symbol):
+        return jsonify({'error': 'Invalid symbol, e.g. BINANCE:BTCUSDT.P'}), 400
+    interval = body.get('interval', '1h')
+    horizon = max(1, min(int(body.get('horizon', 24)), 1000))
+    samples = max(1, min(int(body.get('samples', 30)), 500))
+    if forecast_lock.locked():
+        return jsonify({'error': 'Another forecast is running, please wait'}), 409
+
+    job_id = uuid.uuid4().hex[:12]
+    job = {'status': 'running', 'done': 0, 'total': samples}
+    forecast_jobs[job_id] = job
+
+    def work():
+        with forecast_lock:
+            try:
+                from forecast_service import run_forecast
+                def progress(done, total):
+                    job['done'] = done
+                job['result'] = run_forecast(predictor, symbol, interval, horizon, samples, progress=progress)
+                job['status'] = 'done'
+            except Exception as e:
+                job['status'] = 'error'
+                job['error'] = str(e)
+
+    threading.Thread(target=work, daemon=True).start()
+    while len(forecast_jobs) > 20:
+        forecast_jobs.pop(next(iter(forecast_jobs)))
+    return jsonify({'job_id': job_id})
+
+@app.route('/api/forecast/status/<job_id>')
+def forecast_status(job_id):
+    job = forecast_jobs.get(job_id)
+    if job is None:
+        return jsonify({'error': 'Unknown job'}), 404
+    return jsonify(job)
 
 @app.route('/api/load-data', methods=['POST'])
 def load_data():

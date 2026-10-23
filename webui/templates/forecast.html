@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kronos Live Forecast</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--line:#e3e6eb;--text:#1b2230;--mute:#6b7585;--blue:#2f6fde;--up:#1f9d6b;--down:#d64550}
+@media (prefers-color-scheme:dark){:root{--bg:#10141b;--card:#171c25;--line:#283040;--text:#e6e9ef;--mute:#8d97a8;--blue:#5b94f5;--up:#34c08a;--down:#ef5f6b}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.wrap{max-width:1280px;margin:0 auto;padding:16px}
+.mono{font-family:ui-monospace,Consolas,monospace}
+header{display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;margin-bottom:12px}
+header h1{margin:0;font-size:22px}
+.sub{color:var(--mute)}
+.badge{border:1px solid;border-radius:999px;padding:2px 12px;font-size:12px;font-weight:600;letter-spacing:.04em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.field{display:flex;flex-direction:column;gap:4px;min-width:140px}
+.field.grow{flex:1 1 280px}
+label{font-size:11px;color:var(--mute);letter-spacing:.06em;text-transform:uppercase}
+input,select{padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit}
+button{padding:10px 18px;border:0;border-radius:8px;background:var(--blue);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+button.ghost{background:transparent;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.pill{border:1px solid var(--line);border-radius:999px;padding:3px 12px;font-size:12px;cursor:pointer;background:transparent;color:var(--text);font-weight:400}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));padding:0;overflow:hidden}
+.stat{padding:12px 14px;border-right:1px solid var(--line)}
+.stat:last-child{border-right:0}
+.stat .k{font-size:11px;color:var(--mute);letter-spacing:.06em;text-transform:uppercase}
+.stat .v{font-size:20px;font-weight:600;margin:2px 0}
+.stat .n{font-size:12px;color:var(--mute)}
+#chart{height:520px}
+#msg{min-height:20px;margin-bottom:8px}
+.err{color:var(--down)} .ok{color:var(--up)}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:6px}
+.bar>div{height:100%;width:0;background:var(--blue);transition:width .3s}
+.note{font-size:12px;color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 class="mono" id="h-sym">Kronos Live Forecast</h1>
+    <span class="sub" id="h-sub">Probabilistic price forecast from sampled Kronos paths</span>
+    <span class="badge" id="h-badge" style="display:none"></span>
+    <a class="sub" href="/" style="margin-left:auto">← Backtest UI</a>
+  </header>
+
+  <div class="card">
+    <div class="row">
+      <div class="field"><label>Model</label>
+        <select id="model">
+          <option value="kronos-mini">Kronos-mini (fastest)</option>
+          <option value="kronos-small" selected>Kronos-small</option>
+          <option value="kronos-base">Kronos-base</option>
+        </select></div>
+      <div class="field"><label>Device</label>
+        <select id="device"><option>cpu</option><option>cuda</option><option>mps</option></select></div>
+      <button class="ghost" id="load-model">Load model</button>
+      <span class="sub" id="model-state">No model loaded</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <div class="field grow"><label>Pair and exchange</label>
+        <input id="symbol" class="mono" value="BINANCE:BTCUSDT.P" spellcheck="false"></div>
+      <div class="field"><label>Candle interval</label>
+        <select id="interval"><option>5m</option><option>15m</option><option>30m</option>
+          <option selected>1h</option><option>4h</option><option>1d</option></select></div>
+      <div class="field"><label>Predict next</label><select id="horizon"></select></div>
+      <div class="field" style="min-width:110px"><label>Samples</label>
+        <input id="samples" type="number" min="1" max="500" value="30"></div>
+      <button id="run" disabled>Run forecast</button>
+    </div>
+    <div class="pills" id="pills"></div>
+    <div class="bar" id="bar" style="display:none"><div id="bar-in"></div></div>
+  </div>
+
+  <div id="msg"></div>
+  <div class="card stats" id="stats" style="display:none"></div>
+  <div class="card"><div id="chart"></div></div>
+  <p class="note">More samples give a smoother, more reliable band but take proportionally longer (on CPU, start with 20–50).
+     The newest candle may still be forming and is not fed to the model. This is a statistical model output, not financial advice.</p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const PRESETS = ["BINANCE:BTCUSDT.P","BINANCE:ETHUSDT.P","BINANCE:ZECUSDT.P","BYBIT:SOLUSDT.P","COINBASE:BTCUSD"];
+const MIN = {"5m":5,"15m":15,"30m":30,"1h":60,"4h":240,"1d":1440};
+const HORIZONS = [["1h",60],["4h",240],["12h",720],["1D",1440],["3D",4320]];
+let modelReady = false, busy = false;
+
+try { const s = localStorage.getItem('kf_symbol'); if (s) $('symbol').value = s; } catch(e){}
+
+PRESETS.forEach(p => { const b = document.createElement('button'); b.className='pill mono'; b.textContent=p;
+  b.onclick = () => { $('symbol').value = p; }; $('pills').appendChild(b); });
+
+function fillHorizons(){
+  const m = MIN[$('interval').value], keep = $('horizon').value;
+  $('horizon').innerHTML = '';
+  HORIZONS.forEach(([label, mins]) => {
+    const n = Math.round(mins / m);
+    if (n < 4 || n > 1000) return;
+    const o = document.createElement('option'); o.value = n; o.textContent = `next ${label} · ${n} candles`;
+    $('horizon').appendChild(o);
+  });
+  if ([...$('horizon').options].some(o => o.value === keep)) $('horizon').value = keep;
+}
+$('interval').onchange = fillHorizons; fillHorizons();
+
+function msg(text, cls){ $('msg').className = cls || ''; $('msg').textContent = text || ''; }
+function updateRun(){ $('run').disabled = !modelReady || busy; }
+
+async function api(url, opts){
+  const r = await fetch(url, opts); const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText); return j;
+}
+
+$('load-model').onclick = async () => {
+  $('load-model').disabled = true; $('model-state').textContent = 'Loading model (first time downloads it)...';
+  try {
+    const j = await api('/api/load-model', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({model_key: $('model').value, device: $('device').value})});
+    modelReady = true; $('model-state').textContent = j.message; $('model-state').className = 'sub ok';
+  } catch(e){ modelReady = false; $('model-state').textContent = e.message; $('model-state').className = 'sub err'; }
+  $('load-model').disabled = false; updateRun();
+};
+
+(async () => { try { const j = await api('/api/model-status');
+  if (j.loaded) { modelReady = true; $('model-state').textContent = j.message; updateRun(); } } catch(e){} })();
+
+const fmt = v => v.toLocaleString(undefined, {maximumFractionDigits: v < 10 ? 4 : 2});
+const sgn = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+
+$('run').onclick = async () => {
+  const symbol = $('symbol').value.trim(), interval = $('interval').value;
+  const horizon = +$('horizon').value, samples = +$('samples').value;
+  try { localStorage.setItem('kf_symbol', symbol); } catch(e){}
+  busy = true; updateRun(); msg('Fetching candles and sampling paths...');
+  $('bar').style.display = 'block'; $('bar-in').style.width = '2%';
+  try {
+    const {job_id} = await api('/api/forecast/start', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({symbol, interval, horizon, samples})});
+    while (true) {
+      await new Promise(r => setTimeout(r, 1000));
+      const j = await api('/api/forecast/status/' + job_id);
+      $('bar-in').style.width = Math.max(2, 100 * j.done / j.total) + '%';
+      if (j.status === 'error') throw new Error(j.error);
+      if (j.status === 'done') { render(j.result, $('horizon').selectedOptions[0].textContent); break; }
+    }
+    msg('');
+  } catch(e){ msg(e.message, 'err'); }
+  busy = false; updateRun(); $('bar').style.display = 'none';
+};
+
+function render(r, horizonLabel){
+  const s = r.stats, c = r.candles, f = r.forecast;
+  $('h-sym').textContent = r.symbol;
+  $('h-sub').textContent = `${r.interval} candles · forecast ${horizonLabel.replace('next ','next ')} · ${r.history_count} candles of history · ${r.samples} sampled paths`;
+  const lean = s.higher_pct < 40 ? ['LEANS DOWN','var(--down)'] : s.higher_pct > 60 ? ['LEANS UP','var(--up)'] : ['NEUTRAL','var(--mute)'];
+  const b = $('h-badge'); b.style.display = ''; b.textContent = lean[0]; b.style.color = lean[1]; b.style.borderColor = lean[1];
+
+  const tiles = [
+    [`NOW · ${r.now.time} UTC`, fmt(r.now.price), r.now.forming ? 'newest candle, still forming' : 'latest candle'],
+    [`MEDIAN IN ${horizonLabel.split(' · ')[0].replace('next ','')}`, fmt(s.median_end), sgn(s.median_pct)],
+    ['10TH–90TH RANGE', `${fmt(s.p10_end)} – ${fmt(s.p90_end)}`, `${sgn(s.p10_pct)} to ${sgn(s.p90_pct)}`],
+    ['RANGE WIDTH', '±' + s.half_width_pct.toFixed(2) + '%', 'half the 10th–90th spread'],
+    ['PATHS ENDING HIGHER', Math.round(s.higher_pct) + '%', `of ${r.samples}`],
+  ];
+  $('stats').style.display = 'grid';
+  $('stats').innerHTML = tiles.map(t => `<div class="stat"><div class="k">${t[0]}</div><div class="v mono">${t[1]}</div><div class="n">${t[2]}</div></div>`).join('');
+
+  const shown = Math.min(c.t.length, 200), i0 = c.t.length - shown;
+  const sl = a => a.slice(i0);
+  const up = getComputedStyle(document.documentElement).getPropertyValue('--up').trim();
+  const dn = getComputedStyle(document.documentElement).getPropertyValue('--down').trim();
+  const bl = getComputedStyle(document.documentElement).getPropertyValue('--blue').trim();
+  const mute = getComputedStyle(document.documentElement).getPropertyValue('--mute').trim();
+  const volColors = sl(c.close).map((cl, i) => cl >= sl(c.open)[i] ? up : dn);
+  const last = f.t.length - 1;
+
+  const traces = [
+    {type:'bar', x: sl(c.t), y: sl(c.volume), yaxis:'y2', marker:{color: volColors, opacity:.4}, hoverinfo:'skip', showlegend:false},
+    {type:'candlestick', x: sl(c.t), open: sl(c.open), high: sl(c.high), low: sl(c.low), close: sl(c.close),
+     increasing:{line:{color:up}}, decreasing:{line:{color:dn}}, showlegend:false, name:'price'},
+    {type:'scatter', mode:'lines', x:f.t, y:f.p90, line:{color:bl, width:1.3, dash:'dot'}, name:'p90', showlegend:false},
+    {type:'scatter', mode:'lines', x:f.t, y:f.p10, line:{color:bl, width:1.3, dash:'dot'}, fill:'tonexty',
+     fillcolor:'rgba(47,111,222,.10)', name:'p10', showlegend:false},
+    {type:'scatter', mode:'lines', x:f.t, y:f.median, line:{color:bl, width:2.5}, name:'median', showlegend:false},
+  ];
+  const tag = (y, text) => ({x: f.t[last], y, xref:'x', yref:'y', text, showarrow:false, xanchor:'left', xshift:6,
+    font:{color:'#fff', size:11, family:'monospace'}, bgcolor: bl, borderpad:3});
+  const layout = {
+    margin:{l:10,r:90,t:10,b:30}, paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+    font:{color: mute}, xaxis:{rangeslider:{visible:false}, gridcolor:'rgba(128,128,128,.15)'},
+    yaxis:{side:'right', domain:[0.18,1], gridcolor:'rgba(128,128,128,.15)', tickformat:'~g'},
+    yaxis2:{domain:[0,0.14], showticklabels:false, side:'right'}, hovermode:'x unified',
+    annotations:[tag(f.p90[last],'p90 '+fmt(f.p90[last])), tag(f.median[last],'median '+fmt(f.median[last])), tag(f.p10[last],'p10 '+fmt(f.p10[last]))],
+    shapes:[{type:'line', xref:'paper', x0:0, x1:1, y0:r.now.price, y1:r.now.price, line:{color:mute, width:1, dash:'dot'}}],
+  };
+  Plotly.newPlot('chart', traces, layout, {responsive:true, displaylogo:false});
+}
+</script>
+</body>
+</html>
