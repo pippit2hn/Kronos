@@ -3,6 +3,7 @@
 
 Examples:
     python scripts/download_binance.py BTCUSDT
+    python scripts/download_binance.py BTCUSDT --market futures      # perpetual
     python scripts/download_binance.py ETHUSDT --interval 1d --limit 2000
     python scripts/download_binance.py BTCUSDT --interval 15m --start 2025-01-01 --end 2025-03-01
 
@@ -22,13 +23,17 @@ import urllib.request
 
 import pandas as pd
 
-BASE_URLS = ["https://api.binance.com", "https://data-api.binance.vision"]
+MARKETS = {
+    "spot": (["https://api.binance.com", "https://data-api.binance.vision"], "/api/v3/klines"),
+    "futures": (["https://fapi.binance.com"], "/fapi/v1/klines"),  # USDT-M perpetual
+}
 MAX_PER_REQUEST = 1000
 
 
-def fetch(path, params):
+def fetch(market, params):
+    bases, path = MARKETS[market]
     last_err = None
-    for base in BASE_URLS:
+    for base in bases:
         url = f"{base}{path}?{urllib.parse.urlencode(params)}"
         for attempt in range(3):
             try:
@@ -48,7 +53,7 @@ def to_ms(text):
     return int(pd.Timestamp(text, tz="UTC").timestamp() * 1000)
 
 
-def download(symbol, interval, limit, start, end):
+def download(symbol, interval, limit, start, end, market="spot"):
     end_ms = to_ms(end) if end else None
     if start:
         cursor = to_ms(start)
@@ -62,7 +67,7 @@ def download(symbol, interval, limit, start, end):
             params = {"symbol": symbol, "interval": interval, "startTime": cursor, "limit": MAX_PER_REQUEST}
             if end_ms:
                 params["endTime"] = end_ms
-            batch = fetch("/api/v3/klines", params)
+            batch = fetch(market, params)
             if not batch:
                 break
             rows.extend(batch)
@@ -79,7 +84,7 @@ def download(symbol, interval, limit, start, end):
                       "limit": min(MAX_PER_REQUEST, limit - len(rows))}
             if end_cursor:
                 params["endTime"] = end_cursor
-            batch = fetch("/api/v3/klines", params)
+            batch = fetch(market, params)
             if not batch:
                 break
             rows = batch + rows
@@ -99,12 +104,14 @@ def main():
                    help="Max number of candles (default 5000). With --start, 0 means up to --end/now")
     p.add_argument("--start", help="Start date, e.g. 2025-01-01 (UTC)")
     p.add_argument("--end", help="End date, e.g. 2025-06-01 (UTC)")
+    p.add_argument("--market", choices=list(MARKETS), default="spot",
+                   help="spot or futures (USDT-M perpetual). Default spot")
     p.add_argument("--out-dir", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"))
     args = p.parse_args()
 
     symbol = args.symbol.upper().replace("/", "")
     print(f"Downloading {symbol} {args.interval} from Binance...")
-    rows = download(symbol, args.interval, args.limit, args.start, args.end)
+    rows = download(symbol, args.interval, args.limit, args.start, args.end, args.market)
     if not rows:
         sys.exit("No data returned.")
 
@@ -118,7 +125,7 @@ def main():
     df = df.drop_duplicates("timestamps").sort_values("timestamps")
 
     os.makedirs(args.out_dir, exist_ok=True)
-    path = os.path.join(args.out_dir, f"{symbol}_{args.interval}.csv")
+    path = os.path.join(args.out_dir, f"{symbol}{'_perp' if args.market == 'futures' else ''}_{args.interval}.csv")
     df.to_csv(path, index=False)
     print(f"Saved {len(df)} rows ({df['timestamps'].iloc[0]} -> {df['timestamps'].iloc[-1]}) to {path}")
     if len(df) < 520:
