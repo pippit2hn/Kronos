@@ -133,3 +133,21 @@ If you have questions, please check:
 1. Project documentation
 2. GitHub Issues
 3. Console error messages
+
+## 🐳 Deployment (production)
+
+From the repository root:
+
+```bash
+mkdir -p data            # put your CSV/Feather files here
+docker compose up -d --build
+```
+
+Visit http://<server-ip>:7070. Or without Docker:
+
+```bash
+pip install -r requirements.txt -r webui/requirements.txt gunicorn
+cd webui && gunicorn app:app --bind 0.0.0.0:7070 --workers 1 --threads 4 --timeout 600
+```
+
+Use a single worker (the loaded model lives in process memory). Put a reverse proxy (nginx/Caddy) with HTTPS and auth in front before exposing publicly. Set `FLASK_DEBUG=0` if running `python app.py`.

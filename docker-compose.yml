@@ -1,0 +1,11 @@
+services:
+  kronos-webui:
+    build: .
+    ports:
+      - "7070:7070"
+    volumes:
+      - ./data:/app/data            # financial data files (CSV/Feather)
+      - hf-cache:/app/.cache/huggingface
+    restart: unless-stopped
+volumes:
+  hf-cache:

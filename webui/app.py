@@ -705,4 +705,8 @@ if __name__ == '__main__':
     else:
         print("Tip: Will use simulated data for demonstration")
     
-    app.run(debug=True, host='0.0.0.0', port=7070)
+    app.run(
+        debug=os.environ.get('FLASK_DEBUG', '1') == '1',
+        host=os.environ.get('HOST', '0.0.0.0'),
+        port=int(os.environ.get('PORT', '7070')),
+    )

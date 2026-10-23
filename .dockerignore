@@ -1,0 +1,7 @@
+.git
+figures
+tests
+finetune
+finetune_csv
+examples
+**/__pycache__
