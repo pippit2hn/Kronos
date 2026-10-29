@@ -35,7 +35,7 @@ def run_forecast(predictor, symbol, interval, horizon, samples, history=500,
 
     df = fetch_ohlcv(symbol, interval, history + 2)
     step = pd.Timedelta(FREQ[interval])
-    now = pd.Timestamp(datetime.datetime.utcnow())
+    now = pd.Timestamp.now('UTC').tz_localize(None)
 
     # The newest candle may still be forming: show it, but don't feed it to the model.
     forming = bool(df["timestamps"].iloc[-1] + step > now)
@@ -45,7 +45,7 @@ def run_forecast(predictor, symbol, interval, horizon, samples, history=500,
         raise RuntimeError(f"Only {len(closed)} candles available for {symbol}; need at least 64")
 
     x_ts = closed["timestamps"]
-    y_ts = pd.Series(pd.date_range(x_ts.iloc[-1] + step, periods=horizon, freq=FREQ[interval]))
+    y_ts = pd.Series(pd.date_range(x_ts.iloc[-1], periods=horizon + 1, freq=FREQ[interval])[1:])
     x_df = closed[["open", "high", "low", "close", "volume"]]
 
     paths = sample_paths(predictor, x_df, x_ts, y_ts, samples, chunk, T, top_p, progress)

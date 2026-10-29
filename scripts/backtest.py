@@ -115,7 +115,7 @@ def main():
         hist = min(args.history, predictor.max_context)
         x = df.iloc[max(0, t - hist + 1): t + 1]
         x_ts = x["timestamps"].reset_index(drop=True)
-        y_ts = pd.Series(pd.date_range(x_ts.iloc[-1] + pd.Timedelta(freq), periods=args.horizon, freq=freq))
+        y_ts = pd.Series(pd.date_range(x_ts.iloc[-1], periods=args.horizon + 1, freq=freq)[1:])
         paths = sample_paths(predictor, x[["open", "high", "low", "close", "volume"]].reset_index(drop=True),
                              x_ts, y_ts, args.samples)
         last, end = float(df["close"].iloc[t]), paths[:, -1]
