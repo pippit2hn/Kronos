@@ -10,6 +10,7 @@ from flask_cors import CORS
 import sys
 import warnings
 import datetime
+import csv
 import threading
 import uuid
 warnings.filterwarnings('ignore')
@@ -370,6 +371,33 @@ def fetch_tradingview():
 forecast_jobs = {}
 forecast_lock = threading.Lock()  # one forecast at a time (model is shared and heavy)
 
+SIGNAL_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'signal_log.csv')
+SIGNAL_COLS = ['time_utc', 'symbol', 'interval', 'price', 'decision', 'score', 'kronos_higher_pct',
+               'median_pct', 'p10_pct', 'p90_pct', 'horizon', 'samples']
+
+def log_signal(r):
+    """Append one row per forecast so signals can be reviewed later"""
+    os.makedirs(os.path.dirname(SIGNAL_LOG), exist_ok=True)
+    new = not os.path.exists(SIGNAL_LOG)
+    s, sg = r['stats'], r['signal']
+    with open(SIGNAL_LOG, 'a', newline='') as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(SIGNAL_COLS)
+        w.writerow([datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'), r['symbol'], r['interval'],
+                    r['now']['price'], sg['decision'], round(sg['total'], 3), round(s['higher_pct'], 1),
+                    round(s['median_pct'], 2), round(s['p10_pct'], 2), round(s['p90_pct'], 2),
+                    r['horizon'], r['samples']])
+
+@app.route('/api/signal-log')
+def signal_log():
+    limit = min(int(request.args.get('limit', 20)), 500)
+    if not os.path.exists(SIGNAL_LOG):
+        return jsonify([])
+    with open(SIGNAL_LOG, newline='') as f:
+        rows = list(csv.DictReader(f))
+    return jsonify(rows[-limit:][::-1])
+
 @app.route('/forecast')
 def forecast_page():
     return render_template('forecast.html')
@@ -400,6 +428,10 @@ def forecast_start():
                     job['done'] = done
                 job['result'] = run_forecast(predictor, symbol, interval, horizon, samples, progress=progress)
                 job['status'] = 'done'
+                try:
+                    log_signal(job['result'])
+                except Exception as e:
+                    print(f'Signal log failed: {e}')
             except Exception as e:
                 job['status'] = 'error'
                 job['error'] = str(e)

@@ -83,6 +83,7 @@ table.sig th{color:var(--mute);font-weight:500;font-size:11px;text-transform:upp
       <div class="field" style="min-width:110px"><label>Samples</label>
         <input id="samples" type="number" min="1" max="500" value="50"></div>
       <button id="run" disabled>Run forecast</button>
+      <label style="display:flex;gap:6px;align-items:center;text-transform:none;font-size:13px;color:var(--text)"><input type="checkbox" id="auto"> Auto-update when a candle closes</label>
     </div>
     <div class="pills" id="pills"></div>
     <div class="bar" id="bar" style="display:none"><div id="bar-in"></div></div>
@@ -91,6 +92,7 @@ table.sig th{color:var(--mute);font-weight:500;font-size:11px;text-transform:upp
   <div id="msg"></div>
   <div class="card stats" id="stats" style="display:none"></div>
   <div class="card" id="signal" style="display:none"></div>
+  <div class="card" id="history" style="display:none"></div>
   <div class="card"><div id="chart"></div></div>
   <p class="note">More samples give a smoother, more reliable band but take proportionally longer (on CPU, start with 20–50).
      The newest candle may still be forming and is not fed to the model. This is a statistical model output, not financial advice.</p>
@@ -215,7 +217,21 @@ function render(r, horizonLabel){
   };
   Plotly.newPlot('chart', traces, layout, {responsive:true, displaylogo:false});
   renderSignal(r.signal);
+  loadHistory();
   startLive(r, i0);
+}
+
+async function loadHistory(){
+  try {
+    const rows = await api('/api/signal-log?limit=15');
+    if (!rows.length) return;
+    $('history').style.display = '';
+    $('history').innerHTML = `<div class="sig-head"><b>Signal history</b><span class="sub">saved to data/signal_log.csv</span></div>
+      <table class="sig"><tr><th>Time (UTC)</th><th>Symbol</th><th>Price</th><th>Signal</th><th>Score</th><th>Paths higher</th><th>Median</th></tr>` +
+      rows.map(r => `<tr><td class="mono">${r.time_utc}</td><td class="mono">${r.symbol} ${r.interval}</td><td class="mono">${r.price}</td>
+        <td style="color:${r.decision==='BUY'?'var(--up)':r.decision==='SELL'?'var(--down)':'var(--mute)'}"><b>${r.decision}</b></td>
+        <td class="mono">${r.score}</td><td class="mono">${r.kronos_higher_pct}%</td><td class="mono">${r.median_pct}%</td></tr>`).join('') + '</table>';
+  } catch(e){}
 }
 
 function renderSignal(sg){
@@ -243,10 +259,12 @@ function startLive(r, i0){
     const k = JSON.parse(ev.data), c = live.c;
     const t = new Date(k.t * 1000).toISOString().slice(0, 19).replace('T', ' ');
     const n = c.t.length - 1;
+    const newCandle = t > c.t[n];
     if (t === c.t[n]) { c.open[n]=k.o; c.high[n]=k.h; c.low[n]=k.l; c.close[n]=k.c; c.volume[n]=k.v; }
     else if (t > c.t[n]) { c.t.push(t); c.open.push(k.o); c.high.push(k.h); c.low.push(k.l); c.close.push(k.c); c.volume.push(k.v); }
     else return;
     live.price = k.c; live.time = t;
+    if (newCandle && $('auto').checked && !busy && modelReady) setTimeout(() => $('run').click(), 1500);
     if (!liveTimer) liveTimer = setTimeout(paintLive, 400);   // throttle redraws
   };
   liveSrc.addEventListener('feed_error', ev => { $('live-dot').title = JSON.parse(ev.data).error; $('live-dot').style.opacity = .4; });
