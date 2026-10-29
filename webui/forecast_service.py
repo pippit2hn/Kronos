@@ -4,11 +4,27 @@ import datetime
 import numpy as np
 import pandas as pd
 
+from indicators import add_indicators
+from signals import build_signal
 from tradingview_client import fetch_ohlcv
 
 FREQ = {"1m": "1min", "3m": "3min", "5m": "5min", "15m": "15min", "30m": "30min",
         "1h": "1h", "2h": "2h", "4h": "4h", "1d": "1D"}
 CLOSE = 3  # index of 'close' in [open, high, low, close, volume, amount]
+
+
+def sample_paths(predictor, x_df, x_ts, y_ts, samples, chunk=20, T=1.0, top_p=0.9, progress=None):
+    """Sample `samples` price paths; returns close prices, shape (samples, len(y_ts))."""
+    out, done = [], 0
+    while done < samples:
+        n = min(chunk, samples - done)
+        res = predictor.predict(x_df, x_ts, y_ts, pred_len=len(y_ts), T=T, top_p=top_p,
+                                sample_count=n, verbose=False, return_samples=True)
+        out.append(res[:, :, CLOSE])
+        done += n
+        if progress:
+            progress(done, samples)
+    return np.concatenate(out, axis=0)
 
 
 def run_forecast(predictor, symbol, interval, horizon, samples, history=500,
@@ -32,16 +48,7 @@ def run_forecast(predictor, symbol, interval, horizon, samples, history=500,
     y_ts = pd.Series(pd.date_range(x_ts.iloc[-1] + step, periods=horizon, freq=FREQ[interval]))
     x_df = closed[["open", "high", "low", "close", "volume"]]
 
-    paths, done = [], 0
-    while done < samples:
-        n = min(chunk, samples - done)
-        out = predictor.predict(x_df, x_ts, y_ts, pred_len=horizon, T=T, top_p=top_p,
-                                sample_count=n, verbose=False, return_samples=True)
-        paths.append(out[:, :, CLOSE])
-        done += n
-        if progress:
-            progress(done, samples)
-    paths = np.concatenate(paths, axis=0)  # (samples, horizon)
+    paths = sample_paths(predictor, x_df, x_ts, y_ts, samples, chunk, T, top_p, progress)
 
     last_price = float(df["close"].iloc[-1])
     p10, med, p90 = np.percentile(paths, [10, 50, 90], axis=0)
@@ -50,7 +57,10 @@ def run_forecast(predictor, symbol, interval, horizon, samples, history=500,
     def pct(v):
         return (v / last_price - 1) * 100
 
+    signal = build_signal(add_indicators(closed), float((end > last_price).mean() * 100))
+
     return {
+        "signal": signal,
         "symbol": symbol, "interval": interval, "horizon": horizon, "samples": int(samples),
         "history_count": int(len(closed)),
         "now": {"time": df["timestamps"].iloc[-1].strftime("%m-%d %H:%M"), "price": last_price,

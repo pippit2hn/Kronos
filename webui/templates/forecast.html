@@ -34,6 +34,12 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .stat .v{font-size:20px;font-weight:600;margin:2px 0}
 .stat .n{font-size:12px;color:var(--mute)}
 #chart{height:520px}
+.sig-head{display:flex;flex-wrap:wrap;gap:14px;align-items:baseline;margin-bottom:8px}
+.sig-dec{font-size:22px;font-weight:700}
+table.sig{width:100%;border-collapse:collapse;font-size:13px}
+table.sig td,table.sig th{padding:6px 8px;border-top:1px solid var(--line);text-align:left}
+table.sig th{color:var(--mute);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.sbar{display:inline-block;height:8px;border-radius:4px;vertical-align:middle}
 #msg{min-height:20px;margin-bottom:8px}
 .err{color:var(--down)} .ok{color:var(--up)}
 .bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:6px}
@@ -60,7 +66,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
           <option value="kronos-base">Kronos-base</option>
         </select></div>
       <div class="field"><label>Device</label>
-        <select id="device"><option>cpu</option><option>cuda</option><option>mps</option></select></div>
+        <select id="device"><option>cpu</option><option selected>cuda</option><option>mps</option></select></div>
       <button class="ghost" id="load-model">Load model</button>
       <span class="sub" id="model-state">No model loaded</span>
     </div>
@@ -71,11 +77,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
       <div class="field grow"><label>Pair and exchange</label>
         <input id="symbol" class="mono" value="BINANCE:BTCUSDT.P" spellcheck="false"></div>
       <div class="field"><label>Candle interval</label>
-        <select id="interval"><option>5m</option><option>15m</option><option>30m</option>
-          <option selected>1h</option><option>4h</option><option>1d</option></select></div>
+        <select id="interval"><option>5m</option><option selected>15m</option><option>30m</option>
+          <option>1h</option><option>4h</option><option>1d</option></select></div>
       <div class="field"><label>Predict next</label><select id="horizon"></select></div>
       <div class="field" style="min-width:110px"><label>Samples</label>
-        <input id="samples" type="number" min="1" max="500" value="30"></div>
+        <input id="samples" type="number" min="1" max="500" value="50"></div>
       <button id="run" disabled>Run forecast</button>
     </div>
     <div class="pills" id="pills"></div>
@@ -84,6 +90,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
 
   <div id="msg"></div>
   <div class="card stats" id="stats" style="display:none"></div>
+  <div class="card" id="signal" style="display:none"></div>
   <div class="card"><div id="chart"></div></div>
   <p class="note">More samples give a smoother, more reliable band but take proportionally longer (on CPU, start with 20–50).
      The newest candle may still be forming and is not fed to the model. This is a statistical model output, not financial advice.</p>
@@ -113,6 +120,8 @@ function fillHorizons(){
   if ([...$('horizon').options].some(o => o.value === keep)) $('horizon').value = keep;
 }
 $('interval').onchange = fillHorizons; fillHorizons();
+// default horizon: next 1D
+[...$('horizon').options].forEach(o => { if (o.textContent.startsWith('next 1D')) $('horizon').value = o.value; });
 
 function msg(text, cls){ $('msg').className = cls || ''; $('msg').textContent = text || ''; }
 function updateRun(){ $('run').disabled = !modelReady || busy; }
@@ -205,7 +214,23 @@ function render(r, horizonLabel){
     shapes:[{type:'line', xref:'paper', x0:0, x1:1, y0:r.now.price, y1:r.now.price, line:{color:mute, width:1, dash:'dot'}}],
   };
   Plotly.newPlot('chart', traces, layout, {responsive:true, displaylogo:false});
+  renderSignal(r.signal);
   startLive(r, i0);
+}
+
+function renderSignal(sg){
+  const col = sg.decision === 'BUY' ? 'var(--up)' : sg.decision === 'SELL' ? 'var(--down)' : 'var(--mute)';
+  const rows = sg.components.map(c => {
+    const w = Math.round(Math.abs(c.score) * 60), cc = c.score >= 0 ? 'var(--up)' : 'var(--down)';
+    return `<tr><td class="mono">${c.name.toUpperCase()}</td><td class="mono">${c.score >= 0 ? '+' : ''}${c.score.toFixed(2)} <span class="sbar" style="width:${w}px;background:${cc}"></span></td>
+      <td class="mono">${Math.round(c.weight * 100)}%</td><td>${c.detail}</td></tr>`;
+  }).join('');
+  $('signal').style.display = '';
+  $('signal').innerHTML = `<div class="sig-head"><span class="sig-dec" style="color:${col}">${sg.decision}</span>
+    <span class="mono">score ${sg.total >= 0 ? '+' : ''}${sg.total.toFixed(2)}</span>
+    <span class="sub">BUY ≥ +${sg.threshold}, SELL ≤ −${sg.threshold}, otherwise HOLD · computed on the last closed candle</span></div>
+    <table class="sig"><tr><th>Component</th><th>Score</th><th>Weight</th><th>Detail</th></tr>${rows}</table>
+    <p class="note">Rule-based mix of indicators and the Kronos forecast with untuned default weights. Validate with scripts/backtest.py before relying on it. Not financial advice.</p>`;
 }
 
 // ---- live price: server streams the newest candle over SSE ----
